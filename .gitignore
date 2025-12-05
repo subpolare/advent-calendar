@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Environment variables
+.env
+
+# IDE/editor artifacts
+.vscode/
+.idea/
+.DS_Store
+
+# Bytecode cache
+ython?*/
+
+# Storage outputs
+storage/users-db/
+storage/sent.log
+storage/posts.tsv
+storage/initial_post.json
+
+# Docker artifacts
+*.log

@@ -1,0 +1,1 @@
+"""Advent calendar bot package."""

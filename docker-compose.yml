@@ -1,0 +1,24 @@
+services:
+  bot:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/users
+      STORAGE_DIR: /app/storage
+    volumes:
+      - ./storage:/app/storage
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: users
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./storage/users-db:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
