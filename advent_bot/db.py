@@ -28,11 +28,22 @@ class UserRepository:
         try:
             with psycopg.connect(self._dsn):
                 return
-        except psycopg.OperationalError as exc:
-            sqlstate = getattr(exc, "sqlstate", getattr(exc, "pgcode", None))
-            if sqlstate != InvalidCatalogName.sqlstate:
+        except (psycopg.OperationalError, InvalidCatalogName) as exc:
+            if not self._is_missing_database_error(exc):
                 raise
             self._create_database()
+
+    @staticmethod
+    def _is_missing_database_error(exc: Exception) -> bool:
+        """Return True if the exception represents a missing database."""
+
+        if isinstance(exc, InvalidCatalogName):
+            return True
+        sqlstate = getattr(exc, "sqlstate", None) or getattr(exc, "pgcode", None)
+        if sqlstate == InvalidCatalogName.sqlstate:
+            return True
+        message = str(exc).lower()
+        return "database" in message and "does not exist" in message
 
     def _create_database(self) -> None:
         info = conninfo.conninfo_to_dict(self._dsn)
