@@ -29,7 +29,8 @@ class UserRepository:
             with psycopg.connect(self._dsn):
                 return
         except psycopg.OperationalError as exc:
-            if getattr(exc, "pgcode", None) != InvalidCatalogName.sqlstate:
+            sqlstate = getattr(exc, "sqlstate", getattr(exc, "pgcode", None))
+            if sqlstate != InvalidCatalogName.sqlstate:
                 raise
             self._create_database()
 
