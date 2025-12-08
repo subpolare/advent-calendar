@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 import psycopg
+from psycopg import conninfo, sql
+from psycopg.errors import InvalidCatalogName
 from psycopg_pool import ConnectionPool
 
 
@@ -17,8 +19,37 @@ class User:
 
 class UserRepository:
     def __init__(self, dsn: str) -> None:
+        self._dsn = dsn
+        self._ensure_database_exists()
         self._pool = ConnectionPool(conninfo=dsn, min_size=1, max_size=5, timeout=10)
         self._initialize()
+
+    def _ensure_database_exists(self) -> None:
+        try:
+            with psycopg.connect(self._dsn):
+                return
+        except psycopg.OperationalError as exc:
+            if getattr(exc, "pgcode", None) != InvalidCatalogName.sqlstate:
+                raise
+            self._create_database()
+
+    def _create_database(self) -> None:
+        info = conninfo.conninfo_to_dict(self._dsn)
+        db_name = info.get("dbname")
+        if not db_name:
+            raise RuntimeError("DATABASE_URL must include database name")
+        admin_info = {key: value for key, value in info.items() if value is not None}
+        admin_info["dbname"] = "postgres"
+        admin_dsn = conninfo.make_conninfo(**admin_info)
+        with psycopg.connect(admin_dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (db_name,))
+                exists = cur.fetchone()
+                if exists:
+                    return
+                cur.execute(
+                    sql.SQL("CREATE DATABASE {}").format(sql.Identifier(db_name))
+                )
 
     def _initialize(self) -> None:
         with self._pool.connection() as conn:

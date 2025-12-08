@@ -144,7 +144,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if user and user.status == "stop":
         await repo.upsert_user(user_id, update.effective_user.username, "active")
         await send_typing(context, chat_id, 5)
-        await context.bot.send_message(chat_id=chat_id, text="С возвращением! Теперь у тебя снова будет по одному новому выпуску каждый день ⛄")
+        await context.bot.send_message(chat_id=chat_id, text="С возвращением! Теперь у тебя снова будет по одному новому выпуску каждый день, в 19:00 по Москве ⛄")
         return
 
     await repo.upsert_user(user_id, update.effective_user.username, "active")
