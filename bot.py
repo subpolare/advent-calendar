@@ -6,6 +6,7 @@ from datetime import date, datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
+from telegram.error import BadRequest, Forbidden
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -127,13 +128,23 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if chat_id == CONFIG.admin_chat_id and update.effective_user.is_bot:
         return
 
+    async def safe_send(awaitable):
+        try:
+            return await awaitable
+        except Forbidden:
+            logger.info("User %s blocked the bot; skipping start flow", user_id)
+            return None
+
     repo = get_user_repo(context.application)
     user = await repo.get_user(user_id)
     if user and user.status == "active":
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="Не переживай, новый выпуск прилетит под елочку сегодня в 19:00, Санта помнит о тебе ☃️",
-        )
+        if await safe_send(
+            context.bot.send_message(
+                chat_id=chat_id,
+                text="Не переживай, новый выпуск прилетит под елочку сегодня в 19:00, Санта помнит о тебе ☃️",
+            )
+        ) is None:
+            return
         return
 
     tracker = get_prompt_tracker(context.application)
@@ -144,7 +155,13 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if user and user.status == "stop":
         await repo.upsert_user(user_id, update.effective_user.username, "active")
         await send_typing(context, chat_id, 5)
-        await context.bot.send_message(chat_id=chat_id, text="С возвращением! Теперь у тебя снова будет по одному новому выпуску каждый день, в 19:00 по Москве ⛄")
+        if await safe_send(
+            context.bot.send_message(
+                chat_id=chat_id,
+                text="С возвращением! Теперь у тебя снова будет по одному новому выпуску каждый день, в 19:00 по Москве ⛄",
+            )
+        ) is None:
+            return
         return
 
     await repo.upsert_user(user_id, update.effective_user.username, "active")
@@ -152,7 +169,8 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     intro = (
         f"Йоп, Ян! 🎄\n\nДо Нового года {verb} {days_left} {word}. И мы в ТОПЛЕС создали свой календарь до конца 2026 года\n\nКаждый день ровно я буду отправлять один из наших выпусков. Вспомним все самое крутое, что выходило у нас на канале за последние 10 лет!"
     )
-    await context.bot.send_message(chat_id=chat_id, text=intro)
+    if await safe_send(context.bot.send_message(chat_id=chat_id, text=intro)) is None:
+        return
 
     await send_typing(context, chat_id, 10)
 
@@ -164,11 +182,14 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             ]
         ]
     )
-    prompt_msg = await context.bot.send_message(
-        chat_id=chat_id,
-        text="Хочешь получить первый выпуск уже сейчас? Заодно расскажу тебе о нем то, о чем мы ни разу не говорили публично",
-        reply_markup=keyboard,
-    )
+    if await safe_send(
+        context.bot.send_message(
+            chat_id=chat_id,
+            text="Хочешь получить первый выпуск уже сейчас? Заодно расскажу тебе о нем то, о чем мы ни разу не говорили публично",
+            reply_markup=keyboard,
+        )
+    ) is None:
+        return
     tracker.set_start_state(user_id, "waiting_init_confirm")
 
 
@@ -274,19 +295,32 @@ async def start_flow_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     if not query or not query.message or not query.from_user:
         return
+    user_id = query.from_user.id
+
+    async def answer_callback() -> bool:
+        try:
+            await query.answer()
+            return True
+        except BadRequest as exc:
+            message = str(exc)
+            if "Query is too old" in message or "query id is invalid" in message:
+                logger.info("Ignoring stale callback from %s: %s", user_id, message)
+                return False
+            raise
+
     if query.message.chat.type != "private":
-        await query.answer()
+        await answer_callback()
         return
 
-    user_id = query.from_user.id
     chat_id = query.message.chat_id
     tracker = get_prompt_tracker(context.application)
     state = tracker.get_start_state(user_id)
     if not state:
-        await query.answer()
+        await answer_callback()
         return
 
-    await query.answer()
+    if not await answer_callback():
+        return
 
     if state == "waiting_init_confirm" and query.data == "init_yes":
         await query.edit_message_reply_markup(reply_markup=None)
@@ -331,6 +365,18 @@ async def start_flow_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             tracker.clear_start_state(user_id)
             return
+
+
+async def fallback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message or not update.effective_chat:
+        return
+    if update.effective_chat.type != "private":
+        return
+
+    text = (
+        "Не переживай, новый выпуск прилетит к 19:00 по Москве, Санта помнит про тебя 🎄\n"
+    )
+    await update.message.reply_text(text)
 
 async def _broadcast_post(context: CallbackContext, post: ScheduledPost, user_ids: list[int]) -> None:
     if CONFIG.admin_chat_id is None:
@@ -389,6 +435,12 @@ def build_application() -> Application:
         MessageHandler(filters.REPLY & (filters.PHOTO | filters.VIDEO), media_reply_handler)
     )
     application.add_handler(CallbackQueryHandler(start_flow_callback, pattern="^(init_yes|final_yes|final_no)$"))
+    application.add_handler(
+        MessageHandler(
+            filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
+            fallback_handler,
+        )
+    )
 
     application.job_queue.run_repeating(
         publish_due_posts_job,
